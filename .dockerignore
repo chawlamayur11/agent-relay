@@ -1,0 +1,8 @@
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.git
+agent-relay.db*
+agent-relay-test.db*
+*.log

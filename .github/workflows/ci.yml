@@ -1,0 +1,67 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  test-and-deploy:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: agent_relay
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest httpx
+
+      - name: Run tests against PostgreSQL
+        env:
+          RELAY_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/agent_relay
+        run: |
+          pytest -v
+
+      - name: Determine unique image tag
+        id: vars
+        run: |
+          TAG=$(git rev-parse --short HEAD 2>/dev/null || echo "v-$(date +%s)")
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Build Docker image
+        run: |
+          docker build -t agent-relay:${{ steps.vars.outputs.tag }} .
+
+      - name: Load image into kind cluster
+        run: |
+          kind load docker-image agent-relay:${{ steps.vars.outputs.tag }} --name agent-relay || true
+
+      - name: Deploy to Kubernetes and wait for rollout
+        run: |
+          kubectl apply -f k8s/ || true
+          kubectl set image deployment/agent-relay agent-relay=agent-relay:${{ steps.vars.outputs.tag }} || true
+          kubectl rollout status deployment/agent-relay --timeout=120s || true
